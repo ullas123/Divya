@@ -20,6 +20,7 @@ class Analyzer
             return;
         }
 
+        // Collect all .cs files (C# only)
         _files.AddRange(Directory.GetFiles(folderPath, "*.cs", SearchOption.AllDirectories));
 
         if (_files.Count == 0)
@@ -28,7 +29,7 @@ class Analyzer
             return;
         }
 
-        // Start HTML Report with Styling
+        // Start HTML Report
         _htmlReport.AppendLine(@"
         <html>
         <head>
@@ -37,7 +38,8 @@ class Analyzer
                 body { font-family: Arial, sans-serif; margin: 20px; }
                 h1 { text-align: center; }
                 table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                th { background-color: #add8e6; padding: 10px; border: 1px solid #ddd; }
+                th { background-color: #add8e6; padding: 10px; border: 1px solid #ddd; width: 10%; }
+                th:last-child { width: 60%; } /* Issues column takes 60% */
                 td { padding: 10px; border: 1px solid #ddd; text-align: left; }
                 tr:nth-child(even) { background-color: #f9f9f9; }
             </style>
@@ -50,7 +52,7 @@ class Analyzer
                     <th>Classes</th>
                     <th>Methods</th>
                     <th>Properties</th>
-                    <th>Issues</th>
+                    <th>Issues (Critical, High, Medium, Low)</th>
                 </tr>");
 
         foreach (var file in _files)
@@ -59,8 +61,6 @@ class Analyzer
         }
 
         _htmlReport.AppendLine("</table></body></html>");
-
-        // Save report
         File.WriteAllText("CodeReviewReport.html", _htmlReport.ToString());
         Console.WriteLine("Analysis completed. Report saved as CodeReviewReport.html");
     }
@@ -77,10 +77,10 @@ class Analyzer
 
         // Code Review Analysis
         List<string> issues = new List<string>();
-        DetectLongMethods(root, issues);
-        DetectMissingComments(root, issues);
-        DetectPoorNaming(root, issues);
-        DetectUnusedUsings(root, issues);
+        DetectSecurityRisks(root, issues);
+        DetectPerformanceBottlenecks(root, issues);
+        DetectCodeSmells(root, issues);
+        DetectRefactoringPriorities(root, issues);
 
         // Add results to HTML table
         _htmlReport.AppendLine($"<tr><td>{Path.GetFileName(filePath)}</td>");
@@ -90,75 +90,64 @@ class Analyzer
         _htmlReport.AppendLine($"<td>{(issues.Any() ? string.Join("<br>", issues) : "No Issues Found")}</td></tr>");
     }
 
-    private void DetectLongMethods(SyntaxNode root, List<string> issues)
-{
-    var longMethods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
-        .Where(m => (m.Body?.Statements.Count ?? (m.ExpressionBody != null ? 1 : 0)) > 20)
-        .ToList();
-
-    foreach (var method in longMethods)
+    // Detect hardcoded credentials, weak encryption, etc.
+    private void DetectSecurityRisks(SyntaxNode root, List<string> issues)
     {
-        issues.Add($"⚠️ Method '{method.Identifier.Text}' has more than 20 lines (consider refactoring).");
-    }
-}
+        var hardcodedStrings = root.DescendantNodes().OfType<LiteralExpressionSyntax>()
+            .Where(l => l.Token.ValueText.Contains("password") || l.Token.ValueText.Contains("secret"))
+            .ToList();
 
-
-    private void DetectMissingComments(SyntaxNode root, List<string> issues)
-    {
-        var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().ToList();
-        foreach (var method in methods)
+        foreach (var item in hardcodedStrings)
         {
-            var trivia = method.GetLeadingTrivia();
-          
-          bool hasComments = trivia.Any(t => t.IsKind(SyntaxKind.SingleLineCommentTrivia) 
-                                || t.IsKind(SyntaxKind.MultiLineCommentTrivia));
-
-            if (!hasComments)
-            {
-                issues.Add($"⚠️ Method '{method.Identifier.Text}' lacks documentation/comments.");
-            }
+            issues.Add($"❗ CRITICAL: Hardcoded sensitive data detected: '{item.Token.ValueText}'.");
         }
     }
 
-    private void DetectPoorNaming(SyntaxNode root, List<string> issues)
+    // Detect performance bottlenecks such as inefficient LINQ usage
+    private void DetectPerformanceBottlenecks(SyntaxNode root, List<string> issues)
     {
-        var methodNames = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Select(m => m.Identifier.Text);
-        foreach (var method in methodNames)
-        {
-            if (!char.IsUpper(method[0]))  // PascalCase for methods
-            {
-                issues.Add($"⚠️ Method '{method}' should follow PascalCase naming convention.");
-            }
-        }
+        var unnecessaryLinqCalls = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(inv => inv.ToString().Contains(".ToList().Where") || inv.ToString().Contains(".ToArray().Where"))
+            .ToList();
 
-        var variableNames = root.DescendantNodes().OfType<VariableDeclaratorSyntax>().Select(v => v.Identifier.Text);
-        foreach (var variable in variableNames)
+        foreach (var call in unnecessaryLinqCalls)
         {
-            if (!char.IsLower(variable[0]))  // camelCase for variables
-            {
-                issues.Add($"⚠️ Variable '{variable}' should follows camelCase naming convention.");
-            }
+            issues.Add($"⚠️ HIGH: Unnecessary LINQ conversion detected, use direct filtering.");
         }
     }
 
-    private void DetectUnusedUsings(SyntaxNode root, List<string> issues)
+    // Detect deep nesting, large parameter lists
+    private void DetectCodeSmells(SyntaxNode root, List<string> issues)
     {
-        var usingDirectives = root.DescendantNodes()
-    .OfType<UsingDirectiveSyntax>()
-    .Select(u => u.Name?.ToString() ?? "Unknown") // Fix: Handle null Name
-    .ToList();
+        var deeplyNestedIfs = root.DescendantNodes().OfType<IfStatementSyntax>()
+            .Where(ifStmt => ifStmt.Ancestors().Count(a => a is IfStatementSyntax) > 2)
+            .ToList();
 
-var identifiers = root.DescendantNodes()
-    .OfType<IdentifierNameSyntax>()
-    .Select(id => id.Identifier.Text ?? "Unknown") // Fix: Handle null Identifier
-    .ToHashSet();
-
-        foreach (var usingDirective in usingDirectives)
+        foreach (var ifStmt in deeplyNestedIfs)
         {
-            if (!identifiers.Contains(usingDirective))
-            {
-                issues.Add($"⚠️ Unused using directive: {usingDirective}");
-            }
+            issues.Add($"⚠️ MEDIUM: Deeply nested if-statements, consider refactoring.");
+        }
+
+        var methodsWithTooManyParams = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Where(m => m.ParameterList.Parameters.Count > 5)
+            .ToList();
+
+        foreach (var method in methodsWithTooManyParams)
+        {
+            issues.Add($"⚠️ MEDIUM: Method '{method.Identifier.Text}' has too many parameters.");
+        }
+    }
+
+    // Prioritize refactoring issues
+    private void DetectRefactoringPriorities(SyntaxNode root, List<string> issues)
+    {
+        var longMethods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Where(m => (m.Body?.Statements.Count ?? (m.ExpressionBody != null ? 1 : 0)) > 30)
+            .ToList();
+
+        foreach (var method in longMethods)
+        {
+            issues.Add($"⚠️ LOW: Method '{method.Identifier.Text}' is too long, consider refactoring.");
         }
     }
 }
